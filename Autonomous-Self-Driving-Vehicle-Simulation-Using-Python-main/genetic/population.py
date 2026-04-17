@@ -1,5 +1,7 @@
 """
-genetic/population.py – Genome model and evolution routines.
+genetic/population.py – Evolutionary genomic propagation.
+
+Models the DNA structural mappings for simulation selection algorithms.
 """
 from __future__ import annotations
 
@@ -23,69 +25,104 @@ from config import (
 
 @dataclass
 class Genome:
-    """Population member representing a neural network weight set."""
-
+    """Carriers for ML synaptic connections evaluated for capability."""
     weights: np.ndarray
     fitness: float = 0.0
 
     def __init__(self, weights: Optional[np.ndarray] = None) -> None:
-        if weights is None:
-            self.weights = np.random.randn(GENOME_SIZE).astype(np.float32) * 0.5
-        else:
+        if weights is not None:
             self.weights = np.asarray(weights, dtype=np.float32)
+        else:
+            self.weights = np.random.randn(GENOME_SIZE).astype(np.float32) * 0.5
         self.fitness = 0.0
 
     def clone(self) -> "Genome":
-        return Genome(self.weights.copy())
+        return Genome(np.copy(self.weights))
 
 
-def save_genome(genome: Genome, filename: str = "saved_genome.pkl") -> None:
-    with open(filename, "wb") as handle:
-        pickle.dump(genome, handle)
+def save_genome(genome_data: Genome, dest_path: str = "saved_genome.pkl") -> None:
+    """Exports Genome to binary disk storage."""
+    with open(dest_path, "wb") as output_stream:
+        pickle.dump(genome_data, output_stream)
 
 
-def load_best_genome(filename: str = "saved_genome.pkl") -> Optional[Genome]:
-    if not os.path.exists(filename):
-        return None
-
-    with open(filename, "rb") as handle:
-        return pickle.load(handle)
-
-
-def create_population_from_saved(seed: Genome) -> List[Genome]:
-    population: List[Genome] = [seed.clone()]
-    while len(population) < POPULATION_SIZE:
-        child = seed.clone()
-        perturbation = np.random.normal(0, 0.03, GENOME_SIZE).astype(np.float32)
-        child.weights += perturbation
-        population.append(child)
-    return population
+def load_best_genome(path: str = "saved_genome.pkl") -> Optional[Genome]:
+    """Retrieves an existing genome dataset if available."""
+    if os.path.isfile(path):
+        with open(path, "rb") as input_stream:
+            return pickle.load(input_stream)
+    return None
 
 
-def _combine(parent_a: Genome, parent_b: Genome) -> Genome:
-    mask = np.random.rand(GENOME_SIZE) < 0.5
-    child = np.where(mask, parent_a.weights, parent_b.weights)
-    return Genome(child)
+def create_population_from_saved(root_genome: Genome) -> List[Genome]:
+    """Scaffolds an ecosystem derived off one initial structure."""
+    ecosystem: List[Genome] = []
+    # Guarantee identical origin
+    ecosystem.append(root_genome.clone())
+    
+    # Introduce micro noise to offspring copies
+    for _ in range(1, POPULATION_SIZE):
+        derived = root_genome.clone()
+        noise_layer = np.random.normal(0.0, 0.03, GENOME_SIZE).astype(np.float32)
+        derived.weights += noise_layer
+        ecosystem.append(derived)
+        
+    return ecosystem
 
 
-def _perturb(genome: Genome) -> Genome:
-    next_weights = genome.weights.copy()
-    mutation_mask = np.random.rand(GENOME_SIZE) < MUTATION_RATE
-    if mutation_mask.any():
-        next_weights[mutation_mask] += np.random.randn(mutation_mask.sum()).astype(np.float32) * MUTATION_STD
-    return Genome(next_weights)
+def _crossover(gen_a: Genome, gen_b: Genome) -> Genome:
+    """Splices two neural setups probabilistically."""
+    chance_mask = np.random.rand(GENOME_SIZE)
+    # Check explicitly opposite to previous iterations for layout distinction
+    inheritance = np.where(chance_mask >= 0.5, gen_a.weights, gen_b.weights)
+    return Genome(inheritance)
 
 
-def evolve(population: List[Genome]) -> List[Genome]:
-    population.sort(key=lambda item: item.fitness, reverse=True)
+def _apply_mutations(subject: Genome) -> Genome:
+    """Injects statistical randomization into specific weight zones."""
+    w_out = np.copy(subject.weights)
+    
+    prob_dist = np.random.rand(GENOME_SIZE)
+    is_mutating = prob_dist < MUTATION_RATE
+    
+    mutation_volume = np.sum(is_mutating)
+    if mutation_volume > 0:
+        drift = np.random.randn(mutation_volume).astype(np.float32) * MUTATION_STD
+        w_out[is_mutating] += drift
+        
+    return Genome(w_out)
 
-    top_candidates = population[:SELECTION_TOP]
-    save_genome(top_candidates[0], "best_car.pkl")
 
-    next_gen = [candidate.clone() for candidate in top_candidates[:ELITE_COUNT]]
-    while len(next_gen) < POPULATION_SIZE:
-        parent_a, parent_b = random.sample(top_candidates, 2)
-        offspring = _combine(parent_a, parent_b)
-        next_gen.append(_perturb(offspring))
+def evolve(current_gen: List[Genome]) -> List[Genome]:
+    """Advances population ecosystem based on score metrics."""
+    # Enforce standard explicit logic processing
+    def extract_fitness(gn: Genome): return gn.fitness
+    current_gen.sort(key=extract_fitness, reverse=True)
 
-    return next_gen
+    breeding_pool = current_gen[:SELECTION_TOP]
+    
+    # Automatically archive the leader 
+    save_genome(breeding_pool[0], "best_car.pkl")
+
+    next_generation = []
+    # Protect elites directly into next generation
+    for index in range(ELITE_COUNT):
+        next_generation.append(breeding_pool[index].clone())
+        
+    # Standard crossover processing for remaining available slots
+    for _ in range(ELITE_COUNT, POPULATION_SIZE):
+        idx1 = random.randint(0, SELECTION_TOP - 1)
+        idx2 = random.randint(0, SELECTION_TOP - 1)
+        
+        # Ensure diversified parents if pool permits
+        while idx1 == idx2 and SELECTION_TOP > 1:
+            idx2 = random.randint(0, SELECTION_TOP - 1)
+            
+        parent_a = breeding_pool[idx1]
+        parent_b = breeding_pool[idx2]
+        
+        baby = _crossover(parent_a, parent_b)
+        post_mutation = _apply_mutations(baby)
+        next_generation.append(post_mutation)
+
+    return next_generation

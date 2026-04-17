@@ -1,8 +1,7 @@
 """
-ai/neural_network.py – Small feed-forward neural controller.
+ai/neural_network.py – Controller inferencing architecture.
 
-The network uses a flattened weight vector so the genetic algorithm can
-apply crossover and mutation over a single continuous solution vector.
+Maps serialized genome DNA into structural connection layers.
 """
 from __future__ import annotations
 
@@ -11,35 +10,57 @@ from config import HIDDEN_NODES, SENSOR_COUNT
 
 
 class NeuralNetwork:
-    """Minimal two-layer network for steering and throttle control."""
+    """Feed-forward multi-layer perceptron for vehicular traversal calculations."""
 
     def __init__(self) -> None:
-        self.input_count = SENSOR_COUNT
-        self.hidden_count = HIDDEN_NODES
-        self.output_count = 2
+        self.node_inputs = SENSOR_COUNT
+        self.node_hidden = HIDDEN_NODES
+        self.node_outputs = 2
 
-        self._w1_size = self.input_count * self.hidden_count
-        self._b1_size = self.hidden_count
-        self._w2_size = self.hidden_count * self.output_count
-        self._b2_size = self.output_count
+        # Dimension capacities
+        self.cap_w1 = self.node_inputs * self.node_hidden
+        self.cap_b1 = self.node_hidden
+        self.cap_w2 = self.node_hidden * self.node_outputs
+        self.cap_b2 = self.node_outputs
 
-        self._w1_end = self._w1_size
-        self._b1_end = self._w1_end + self._b1_size
-        self._w2_end = self._b1_end + self._w2_size
-        self._b2_end = self._w2_end + self._b2_size
+    def _extract_layers(self, dna_array: np.ndarray):
+        """Consume sequence progressively via offset increments."""
+        cursor = 0
+        
+        # Pull Input -> Hidden weights
+        next_cursor = cursor + self.cap_w1
+        w_in_hid = dna_array[cursor : next_cursor].reshape((self.node_inputs, self.node_hidden))
+        cursor = next_cursor
+        
+        # Pull Hidden Bias
+        next_cursor = cursor + self.cap_b1
+        b_hid = dna_array[cursor : next_cursor]
+        cursor = next_cursor
+        
+        # Pull Hidden -> Output weights
+        next_cursor = cursor + self.cap_w2
+        w_hid_out = dna_array[cursor : next_cursor].reshape((self.node_hidden, self.node_outputs))
+        cursor = next_cursor
+        
+        # Pull Output Bias
+        next_cursor = cursor + self.cap_b2
+        b_out = dna_array[cursor : next_cursor]
+        
+        return w_in_hid, b_hid, w_hid_out, b_out
 
-    def _unpack(self, genome: np.ndarray):
-        w1 = genome[: self._w1_end].reshape(self.input_count, self.hidden_count)
-        b1 = genome[self._w1_end : self._b1_end]
-        w2 = genome[self._b1_end : self._w2_end].reshape(self.hidden_count, self.output_count)
-        b2 = genome[self._w2_end : self._b2_end]
-        return w1, b1, w2, b2
+    def _propagate(self, data: np.ndarray) -> np.ndarray:
+        """Hyperbolic tangent activation."""
+        return np.tanh(data)
 
-    def _activate(self, x: np.ndarray) -> np.ndarray:
-        return np.tanh(x)
-
-    def infer(self, sensors: np.ndarray, genome: np.ndarray) -> np.ndarray:
-        """Produce steering and throttle outputs from sensor inputs."""
-        w1, b1, w2, b2 = self._unpack(genome)
-        hidden = self._activate(sensors @ w1 + b1)
-        return self._activate(hidden @ w2 + b2)
+    def infer(self, sensor_readings: np.ndarray, dna_matrix: np.ndarray) -> np.ndarray:
+        """Calculate actuation commands over dual dense pathways."""
+        arr_w1, arr_b1, arr_w2, arr_b2 = self._extract_layers(dna_matrix)
+        
+        # Dot product with active bounds restriction
+        l1_feed = (sensor_readings @ arr_w1) + arr_b1
+        l1_activation = self._propagate(l1_feed)
+        
+        l2_feed = (l1_activation @ arr_w2) + arr_b2
+        final_emission = self._propagate(l2_feed)
+        
+        return final_emission

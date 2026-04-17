@@ -1,7 +1,8 @@
 """
-car/sensors.py – Raycasting sensor model for the car.
+car/sensors.py – LiDAR/Raycasting obstacle detection mechanics.
 
-Each sensor returns the nearest obstacle distance within a fixed range.
+Sweeps rays outward and calculates Euclidean bounds to
+evaluate nearby collidable elements.
 """
 import math
 from typing import List
@@ -12,28 +13,50 @@ from config import SENSOR_COUNT, SENSOR_LENGTH
 
 class Sensors:
     def __init__(self) -> None:
-        self.count = SENSOR_COUNT
-        self.fov = 120
-        self.step = self.fov / (self.count - 1) if self.count > 1 else 0
+        self.num_rays = SENSOR_COUNT
+        self.viewing_angle = 120
+        
+        # Determine angle chunking to prevent division by zero gracefully
+        if self.num_rays > 1:
+            self.angle_increment = self.viewing_angle / (self.num_rays - 1)
+        else:
+            self.angle_increment = 0
 
-    def get_readings(self, position: pygame.Vector2, heading: float, track_mask: pygame.Mask) -> List[float]:
-        width, height = track_mask.get_size()
-        distances: List[float] = []
+    def get_readings(self, location: pygame.Vector2, orientation: float, track_mask: pygame.Mask) -> List[float]:
+        mask_w, mask_h = track_mask.get_size()
+        scan_results: List[float] = []
 
-        for index in range(self.count):
-            ray_angle = heading - self.fov / 2 + index * self.step
-            radians = math.radians(ray_angle)
-            dx = math.cos(radians)
-            dy = -math.sin(radians)
-            distance = float(SENSOR_LENGTH)
-
-            for depth in range(1, SENSOR_LENGTH + 1):
-                x = int(position.x + dx * depth)
-                y = int(position.y + dy * depth)
-                if x < 0 or x >= width or y < 0 or y >= height or track_mask.get_at((x, y)):
-                    distance = float(depth)
+        # Iterate rays dynamically
+        ray_idx = 0
+        while ray_idx < self.num_rays:
+            
+            # Map out target degree based on starting heading and viewing angle spread
+            sweep_offset = self.viewing_angle / 2.0
+            target_deg = (orientation - sweep_offset) + (ray_idx * self.angle_increment)
+            
+            rads = math.radians(target_deg)
+            delta_x = math.cos(rads)
+            delta_y = -math.sin(rads)
+            
+            collision_distance = float(SENSOR_LENGTH)
+            
+            # Stepwise progression ray mapping
+            step_depth = 1
+            while step_depth <= SENSOR_LENGTH:
+                pos_x = int(location.x + (delta_x * step_depth))
+                pos_y = int(location.y + (delta_y * step_depth))
+                
+                # Check spatial matrix constraints
+                x_invalid = (pos_x < 0) or (pos_x >= mask_w)
+                y_invalid = (pos_y < 0) or (pos_y >= mask_h)
+                
+                if x_invalid or y_invalid or track_mask.get_at((pos_x, pos_y)):
+                    collision_distance = float(step_depth)
                     break
+                    
+                step_depth += 1
 
-            distances.append(distance)
+            scan_results.append(collision_distance)
+            ray_idx += 1
 
-        return distances
+        return scan_results

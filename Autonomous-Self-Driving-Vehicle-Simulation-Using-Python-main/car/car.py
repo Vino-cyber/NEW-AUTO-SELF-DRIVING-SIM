@@ -1,7 +1,8 @@
 """
-car/car.py – Autonomous car physics, sensing, and rendering.
+car/car.py – Core vehicle structure and rendering.
 
-This car model tracks position, heading, speed, and neural genome state.
+Handles position tracking, orientation updates via neural inputs,
+and Pygame drawing operations for the vehicle body and history.
 """
 
 import math
@@ -24,93 +25,132 @@ from config import (
 
 
 class Car:
-    def __init__(self, x: float, y: float, genome) -> None:
-        self.pos: pygame.Vector2 = pygame.Vector2(x, y)
-        self.angle: float = 0.0
-        self.speed: float = MIN_SPEED
+    def __init__(self, init_x: float, init_y: float, genome) -> None:
+        self.location: pygame.Vector2 = pygame.Vector2(init_x, init_y)
+        self.orientation: float = 0.0
+        self.velocity: float = MIN_SPEED
         self.genome = genome
-        self.alive: bool = True
-        self.distance: float = 0.0
-        self.time_alive: int = 0
-        self.damage: float = 0.0
-        self.sensors: List[float] = [float(SENSOR_LENGTH)] * 7
-        self.trail: List[Tuple[int, int]] = []
+        
+        self.is_active: bool = True
+        self.distance_traveled: float = 0.0
+        self.ticks_survived: int = 0
+        self.accumulated_damage: float = 0.0
+        
+        # Initialize default sensor outputs
+        self.sensor_data: List[float] = [float(SENSOR_LENGTH) for _ in range(7)]
+        self.path_history: List[Tuple[int, int]] = []
 
-    def apply_controls(self, command: np.ndarray) -> None:
-        if not self.alive:
+    def execute_move(self, action_vector: np.ndarray) -> None:
+        if not self.is_active:
             return
 
-        steer = float(command[0])
-        accel = float(command[1])
+        # Extract commands mapping 0->steer, 1->throttle
+        steering_input = float(action_vector[0])
+        throttle_input = float(action_vector[1])
 
-        self.angle += steer * STEER_POWER
-        self.speed += accel * 0.28
-        self.speed = float(np.clip(self.speed, MIN_SPEED, MAX_SPEED))
+        # Kinematics update
+        self.orientation += steering_input * STEER_POWER
+        
+        # Adjust velocity with bounds checking
+        new_velocity = self.velocity + (throttle_input * 0.28)
+        self.velocity = float(max(MIN_SPEED, min(new_velocity, MAX_SPEED)))
 
-        angle_rad = math.radians(self.angle)
-        self.pos.x += math.cos(angle_rad) * self.speed
-        self.pos.y -= math.sin(angle_rad) * self.speed
+        rad = math.radians(self.orientation)
+        
+        # Vector displacement
+        delta_x = math.cos(rad) * self.velocity
+        delta_y = math.sin(rad) * self.velocity
+        
+        self.location.x += delta_x
+        self.location.y -= delta_y
 
-        self.distance += self.speed
-        self.time_alive += 1
-        self._log_trail()
+        # Progress tracking
+        self.distance_traveled += self.velocity
+        self.ticks_survived += 1
+        
+        self._record_path()
 
-    def _log_trail(self) -> None:
-        self.trail.append((int(self.pos.x), int(self.pos.y)))
-        if len(self.trail) > 70:
-            self.trail.pop(0)
+    def _record_path(self) -> None:
+        # Save exact integral position to history map
+        coord = (int(self.location.x), int(self.location.y))
+        self.path_history.append(coord)
+        # Shift out old data instead of growing infinitely
+        while len(self.path_history) > 70:
+            self.path_history.pop(0)
 
-    def draw(self, screen: pygame.Surface, highlight: bool = False) -> None:
-        if highlight:
-            self._draw_trail(screen)
+    def draw(self, target_surface: pygame.Surface, is_best: bool = False) -> None:
+        if is_best:
+            self._render_path(target_surface)
 
-        self._draw_vehicle(screen, highlight)
-        self._draw_sensors(screen, highlight)
+        self._render_chassis(target_surface, is_best)
+        self._render_rays(target_surface, is_best)
 
-    def _draw_trail(self, screen: pygame.Surface) -> None:
-        if len(self.trail) < 2:
+    def _render_path(self, surface: pygame.Surface) -> None:
+        history_size = len(self.path_history)
+        if history_size < 2:
             return
 
-        for index in range(1, len(self.trail)):
-            start = self.trail[index - 1]
-            end = self.trail[index]
-            ratio = index / len(self.trail)
-            color = (
-                int(COL_BEST_CAR[0] * ratio),
-                int(COL_BEST_CAR[1] * ratio),
-                int(COL_BEST_CAR[2] * ratio * 0.6),
-            )
-            pygame.draw.line(screen, color, start, end, 2)
+        # Draw line segments with fading gradient based on iteration index
+        for idx in range(1, history_size):
+            p_prev = self.path_history[idx - 1]
+            p_curr = self.path_history[idx]
+            
+            fade_factor = idx / history_size
+            r_val = int(COL_BEST_CAR[0] * fade_factor)
+            g_val = int(COL_BEST_CAR[1] * fade_factor)
+            b_val = int(COL_BEST_CAR[2] * fade_factor * 0.6)
+            
+            pygame.draw.line(surface, (r_val, g_val, b_val), p_prev, p_curr, 2)
 
-    def _draw_vehicle(self, screen: pygame.Surface, highlight: bool) -> None:
-        head = pygame.Vector2(math.cos(math.radians(self.angle)), -math.sin(math.radians(self.angle)))
-        side = pygame.Vector2(-head.y, head.x)
+    def _render_chassis(self, surface: pygame.Surface, is_best: bool) -> None:
+        # Determine heading normal vector
+        rad_orient = math.radians(self.orientation)
+        forward_x = math.cos(rad_orient)
+        forward_y = -math.sin(rad_orient)
+        
+        heading_vec = pygame.Vector2(forward_x, forward_y)
+        ortho_vec = pygame.Vector2(-forward_y, forward_x)
 
-        front = self.pos + head * (CAR_RADIUS * 1.8)
-        left = self.pos + side * CAR_RADIUS
-        right = self.pos - side * CAR_RADIUS
+        # Map vertices
+        v_front = self.location + (heading_vec * (CAR_RADIUS * 1.8))
+        v_port = self.location + (ortho_vec * CAR_RADIUS)
+        v_starboard = self.location - (ortho_vec * CAR_RADIUS)
+        
+        vertices = [v_front, v_port, v_starboard]
 
-        body_color = COL_BEST_CAR if highlight else (COL_CAR_ALIVE if self.alive else COL_CAR_DEAD)
-        pygame.draw.polygon(screen, body_color, [front, left, right])
-        border = (220, 220, 220) if highlight else (40, 40, 40)
-        pygame.draw.polygon(screen, border, [front, left, right], 1)
+        if is_best:
+            hull_paint = COL_BEST_CAR
+            trim_paint = (220, 220, 220)
+        else:
+            hull_paint = COL_CAR_ALIVE if self.is_active else COL_CAR_DEAD
+            trim_paint = (40, 40, 40)
 
-    def _draw_sensors(self, screen: pygame.Surface, highlight: bool) -> None:
-        if not highlight:
+        pygame.draw.polygon(surface, hull_paint, vertices)
+        pygame.draw.polygon(surface, trim_paint, vertices, 1)
+
+    def _render_rays(self, surface: pygame.Surface, is_best: bool) -> None:
+        if not is_best:
             return
 
-        count = len(self.sensors)
-        fov = 120
-        angle_step = fov / (count - 1)
+        num_sensors = len(self.sensor_data)
+        spread = 120
+        delta_angle = spread / (num_sensors - 1)
 
-        for index, distance in enumerate(self.sensors):
-            ray_angle = self.angle - fov / 2 + index * angle_step
-            ray_rad = math.radians(ray_angle)
-            end = (
-                self.pos.x + math.cos(ray_rad) * distance,
-                self.pos.y - math.sin(ray_rad) * distance,
-            )
-            color = COL_SENSOR_HIT if distance < SENSOR_LENGTH else COL_SENSOR
-            pygame.draw.line(screen, color, self.pos, end, 1)
-            if distance < SENSOR_LENGTH:
-                pygame.draw.circle(screen, color, (int(end[0]), int(end[1])), 3)
+        # Plot all sensor hit marks and lines
+        for idx in range(num_sensors):
+            dist = self.sensor_data[idx]
+            
+            sweep_off = (spread / 2) - (idx * delta_angle)
+            actual_angle = math.radians(self.orientation - sweep_off)
+            
+            target_px = self.location.x + (math.cos(actual_angle) * dist)
+            target_py = self.location.y - (math.sin(actual_angle) * dist)
+            hit_point = (target_px, target_py)
+            
+            # Use red hit color if object is near, else bright generic sensor color
+            ray_clr = COL_SENSOR_HIT if dist < SENSOR_LENGTH else COL_SENSOR
+            pygame.draw.line(surface, ray_clr, self.location, hit_point, 1)
+            
+            if dist < SENSOR_LENGTH:
+                # Plop a circle right at collision coordinate
+                pygame.draw.circle(surface, ray_clr, (int(target_px), int(target_py)), 3)
